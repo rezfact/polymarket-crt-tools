@@ -1,6 +1,6 @@
 # polymarket_htf (btc15m workspace)
 
-Python toolkit for **15m / 5m** Polymarket crypto Up/Down **slug discovery**, a **mechanical 3-candle CRT (AMD)** signal (Candle-1 CRH/CRL → Candle-2 liquidity sweep → Candle-3 close back inside, optional HTF zone filter), **backtest** on Binance OHLC (research proxy only), **dry-run journaling**, and **EOA redeem** for resolved positions.
+Python toolkit for **15m / 5m** Polymarket crypto Up/Down **slug discovery**, a **mechanical 3-candle CRT (AMD)** signal (Candle-1 CRH/CRL → Candle-2 liquidity sweep → Candle-3 close back inside, optional HTF zone filter), **backtest** on **Pyth Benchmarks TV** OHLC by default (optional Binance), **dry-run journaling**, and **EOA redeem** for resolved positions.
 
 **Language:** Python matches the sibling `btc5m` repo (pandas backtests, same Gamma slug convention, `web3` redeem). Node is fine for HTTP bots, but you already have a full research stack in Python.
 
@@ -18,11 +18,11 @@ pip install -r requirements.txt
 ## Commands
 
 ```bash
-# Backtest (Binance candles — not Chainlink settlement)
+# Backtest (default: Pyth OHLC — not Chainlink settlement)
 python scripts/backtest.py --asset btc --exec-interval 15m
 # With sizing: USDC spent = max($1, floor(10% × capital)); PnL uses Polymarket-style **shares = USDC / entry** and $1/share redemption if you win. Optional separate NO mid for DOWN:
 python scripts/backtest.py --asset btc --initial-capital 20 --yes-entry-mid 0.52 --no-entry-mid 0.50 --fee-roundtrip-bps 50
-# Q1 2026 (UTC), Binance history with warmup before Jan 1
+# Q1 2026 (UTC), Pyth history with warmup before Jan 1 (use ``--price-source binance`` only if you can reach Binance)
 python scripts/backtest.py --asset btc --initial-capital 5 --start 2026-01-01 --end 2026-04-01
 
 # Scan active Gamma slugs (needs network)

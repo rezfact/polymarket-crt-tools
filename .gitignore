@@ -1,0 +1,11 @@
+.venv/
+.venv313/
+__pycache__/
+*.py[cod]
+.env
+var/*
+!var/.gitkeep
+data/binance_vision/
+.pytest_cache/
+*.csv
+!.gitkeep
