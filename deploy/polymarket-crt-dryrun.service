@@ -1,0 +1,17 @@
+[Unit]
+Description=polymarket-crt-tools CRT dryrun (Gamma + JSONL, no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/polymarket-crt-tools
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/polymarket-crt-tools/.venv/bin/python scripts/dryrun.py --tf 15 --price-source pyth --log-on-bar-change --state-file var/dryrun_bar_state.json --interval-sec 60 --journal var/dryrun.jsonl --crt-preset loose --crt-no-htf-filter --crt-sweep-conflict prefer_bull
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

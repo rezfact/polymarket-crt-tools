@@ -264,6 +264,35 @@ def gamma_outcome_sum_deviation(ev: dict[str, Any]) -> float | None:
     return abs(a + b - 1.0)
 
 
+def gamma_clob_token_ids_up_down(ev: dict[str, Any]) -> tuple[str, str] | None:
+    """
+    First market on a Gamma **event** (slug): CLOB token ids for **Up** then **Down**.
+
+    ``clobTokenIds`` is usually a JSON string ``["<id_up>", "<id_down>"]``.
+    """
+    import json
+
+    mks = ev.get("markets") or []
+    if not mks or not isinstance(mks, list):
+        return None
+    m0 = mks[0] if isinstance(mks[0], dict) else {}
+    raw = m0.get("clobTokenIds")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            arr = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(raw, list):
+        arr = raw
+    else:
+        return None
+    if len(arr) < 2:
+        return None
+    return str(arr[0]).strip(), str(arr[1]).strip()
+
+
 def gamma_market_headline(ev: dict[str, Any]) -> dict[str, Any]:
     """First market block summary for logging."""
     mks = ev.get("markets") or []

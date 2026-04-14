@@ -9,6 +9,7 @@ Candidates: ``POLYMARKET_HTF_PYTHON`` (must be a venv), ``.venv313/bin/python``,
 Disable with ``POLYMARKET_HTF_NO_VENV_REEXEC=1``.
 
 Logs JSONL events; tune flags to benchmark vs a simpler baseline (e.g. ``--entry-mode``).
+Optional unified eval copy: env ``STRATEGY_EVAL_JOURNAL`` / ``LIVE_EVAL_JOURNAL`` (same as ``dryrun.py``).
 """
 from __future__ import annotations
 
@@ -106,6 +107,10 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    from polymarket_htf.config_env import load_dotenv_files
+
+    load_dotenv_files(project_root=ROOT)
+
     if args.tf != 15:
         print("error: CRT defaults are 15m exec; use tf=15 unless you extend CRTParams", file=sys.stderr)
         return 2
@@ -113,7 +118,7 @@ def main() -> int:
     try:
         from polymarket_htf.crt_presets import apply_crt_preset
         from polymarket_htf.crt_strategy import CRTParams
-        from polymarket_htf.journal import append_jsonl, utc_now_iso
+        from polymarket_htf.journal import append_jsonl_with_eval_mirror, utc_now_iso
         from polymarket_htf.watch_session import SweetSpotWatchParams, SweetSpotWatchSession
     except ModuleNotFoundError as e:
         req = ROOT / "requirements.txt"
@@ -180,7 +185,7 @@ def main() -> int:
         evs = sess.tick()
         for e in evs:
             row = {"ts": utc_now_iso(), **e}
-            append_jsonl(args.journal, row)
+            append_jsonl_with_eval_mirror(args.journal, row, pipeline="sweet_spot")
             print(json.dumps(row, default=str))
         if args.once:
             break

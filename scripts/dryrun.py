@@ -3,6 +3,9 @@
 Poll Gamma + OHLC (Binance or Pyth), log **would-be** trades (no keys, no orders).
 
 Use for timestamped notes: slug, CRT side, reason, optional Gamma headline.
+
+Primary journal: ``--journal`` (default ``var/journal.jsonl`` — repo-relative ``var/``, not Linux ``/var``).
+Optional unified eval copy: set env ``STRATEGY_EVAL_JOURNAL`` / ``LIVE_EVAL_JOURNAL`` (e.g. absolute path on VPS).
 """
 from __future__ import annotations
 
@@ -93,6 +96,10 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    from polymarket_htf.config_env import load_dotenv_files
+
+    load_dotenv_files(project_root=ROOT)
+
     if args.log_on_bar_change:
         print(
             "dryrun: logging CRT on **last closed** 15m bar only. "
@@ -105,7 +112,7 @@ def main() -> int:
         from polymarket_htf.crt_presets import apply_crt_preset
         from polymarket_htf.crt_strategy import CRTParams, last_signal_completed_bar, last_signal_for_asset
         from polymarket_htf.gamma import fetch_event_by_slug, gamma_market_headline, gamma_side_price_gate, scan_all_assets
-        from polymarket_htf.journal import append_jsonl, utc_now_iso
+        from polymarket_htf.journal import append_jsonl_with_eval_mirror, utc_now_iso
         from polymarket_htf.assets import supported_assets
     except ModuleNotFoundError as e:
         req = ROOT / "requirements.txt"
@@ -195,7 +202,7 @@ def main() -> int:
                         max_side_price=args.gamma_max_side_price,
                     )
                     rec["gamma_side_gate"] = {"pass": ok, **det}
-                append_jsonl(args.journal, rec)
+                append_jsonl_with_eval_mirror(args.journal, rec, pipeline="dryrun")
                 print(rec["ts"], asset, slug, sig.get("side"), sig.get("reason"))
                 if args.log_on_bar_change:
                     _save_state()

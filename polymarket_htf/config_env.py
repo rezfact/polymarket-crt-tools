@@ -27,6 +27,23 @@ def load_dotenv_files(*, project_root: Path | None = None) -> None:
     load_dotenv(override=False)
 
 
+def strategy_eval_journal_path() -> Path | None:
+    """
+    Optional **second** JSONL path for long-term strategy evaluation (paper + future live).
+
+    Set ``STRATEGY_EVAL_JOURNAL`` (or alias ``LIVE_EVAL_JOURNAL``), e.g. on a VPS::
+
+        STRATEGY_EVAL_JOURNAL=/var/log/polymarket_htf/strategy_eval.jsonl
+
+    :func:`polymarket_htf.journal.append_jsonl_with_eval_mirror` writes the same row as the primary
+    journal plus ``pipeline`` (``dryrun``, ``sweet_spot``, or later ``live``).
+    """
+    raw = os.getenv("STRATEGY_EVAL_JOURNAL") or os.getenv("LIVE_EVAL_JOURNAL")
+    if not raw or not str(raw).strip():
+        return None
+    return Path(str(raw).strip()).expanduser()
+
+
 def env_str(name: str, default: str) -> str:
     raw = os.getenv(name)
     if raw is None:
@@ -220,3 +237,40 @@ def pyth_benchmarks_request_headers() -> dict[str, str]:
 def pyth_hermes_api_base() -> str:
     """Hermes REST base (no trailing path); e.g. ``https://hermes.pyth.network``."""
     return env_str("PYTH_HERMES_URL", "https://hermes.pyth.network").rstrip("/")
+
+
+def poly_clob_host() -> str:
+    """Polymarket CLOB HTTP API base (no trailing slash)."""
+    return env_str("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com").rstrip("/")
+
+
+def live_trading_enabled() -> bool:
+    """Master switch: ``scripts/clob_smoke.py --execute`` requires this plus no kill-switch file."""
+    return env_bool("LIVE_TRADING_ENABLED", False)
+
+
+def live_smoke_max_usd() -> float:
+    """Cap notional (price × size) for ``clob_smoke`` BUY (default ``3``)."""
+    return env_float("LIVE_SMOKE_MAX_USD", 3.0)
+
+
+def live_max_stake_usd() -> float | None:
+    """Optional max USDC per slice for a future live worker (unset = no env cap)."""
+    raw = env_optional_str("LIVE_MAX_STAKE_USD")
+    if raw is None:
+        return None
+    return float(raw)
+
+
+def live_kill_switch_path() -> Path | None:
+    """
+    If this path **exists** as a file, live order placement is treated as **paused**
+    (``clob_smoke --execute`` exits; use ``touch`` / ``rm`` for a crude runbook).
+    """
+    raw = env_optional_str("LIVE_KILL_SWITCH_PATH")
+    return Path(raw).expanduser() if raw else None
+
+
+def live_trading_paused_by_file() -> bool:
+    p = live_kill_switch_path()
+    return bool(p and p.is_file())
