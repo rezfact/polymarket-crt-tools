@@ -78,6 +78,8 @@ def test_analyze_crt_exports_smoke(tmp_path: Path) -> None:
                         "fib_zone": [1, 2],
                         "trend_up": False,
                         "result": "paper_fill",
+                        "settlement_tie": False,
+                        "side_win": True,
                     }
                 ),
             ]
@@ -99,6 +101,7 @@ def test_analyze_crt_exports_smoke(tmp_path: Path) -> None:
     assert "Toy by side" in out
     assert "paper_fill" in out
     assert "WSS result × side" in out
+    assert "WSS paper_fill" in out
 
 
 def test_analyze_crt_exports_range_filters(tmp_path: Path) -> None:

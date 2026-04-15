@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -43,6 +44,8 @@ class BacktestAccountConfig:
     no_entry_mid: float | None = None
     # Round-trip fees as fraction of **usdc** (single knob): 100 bps = 1% of stake per trade.
     fee_roundtrip_bps: float = 0.0
+    # Per-trade USDC cap (see :func:`polymarket_htf.sizing.trade_usd_from_capital`); ``None`` = no cap.
+    max_stake_usd: float | None = 10.0
     # Optional take-profit ladder on a **linear mark bridge** to the toy terminal (0/1); see
     # :func:`polymarket_htf.take_profit_ladder.simulate_tp_ladder_on_bridge`.
     take_profit_tiers: str | None = None
@@ -189,6 +192,71 @@ def summarize_toy_crt_trades(
     }
 
 
+def summarize_wss_sim_fills(
+    rows: Iterable[dict[str, Any]],
+    *,
+    stake_usd: float,
+    yes_entry_mid: float = 0.5,
+    no_entry_mid: float | None = None,
+    fee_roundtrip_bps: float = 0.0,
+) -> dict[str, float | int | None]:
+    """
+    Win rate and share-model PnL on ``kind=wss_sim`` rows with ``result=paper_fill``.
+
+    Expects settlement fields from :func:`polymarket_htf.crt_wss_monthly.wss_proxy_settlement_from_slice`
+    (``side_win``, ``settlement_tie``). Ties are counted but excluded from WR denominator.
+    """
+    fee_rt = float(fee_roundtrip_bps) / 10_000.0
+    n_fill = 0
+    n_tie = 0
+    n_missing = 0
+    settled = 0
+    wins = 0
+    pnl_gross_sum = 0.0
+    fee_sum = 0.0
+    for r in rows:
+        if str(r.get("kind", "")) != "wss_sim" or str(r.get("result", "")) != "paper_fill":
+            continue
+        n_fill += 1
+        if bool(r.get("settlement_tie")):
+            n_tie += 1
+            continue
+        sw = r.get("side_win")
+        if sw is None:
+            n_missing += 1
+            continue
+        settled += 1
+        win = bool(sw)
+        if win:
+            wins += 1
+        side = str(r.get("side", "SKIP"))
+        st = share_settlement(
+            usdc_spent=float(stake_usd),
+            win=win,
+            side=side,
+            yes_mid=float(yes_entry_mid),
+            no_mid=no_entry_mid,
+        )
+        fee = float(stake_usd) * fee_rt
+        pnl_gross_sum += st.pnl_gross
+        fee_sum += fee
+    pnl_net = pnl_gross_sum - fee_sum
+    wr: float | None = (wins / settled) if settled else None
+    return {
+        "paper_fills": n_fill,
+        "settlement_ties": n_tie,
+        "legacy_missing_settlement": n_missing,
+        "settled_trades": settled,
+        "wins": wins,
+        "losses": settled - wins,
+        "win_rate": wr,
+        "pnl_gross_usd": pnl_gross_sum,
+        "fees_usd": fee_sum,
+        "pnl_net_usd": pnl_net,
+        "stake_usd": float(stake_usd),
+    }
+
+
 def run_crt_backtest(
     asset: str,
     *,
@@ -247,7 +315,7 @@ def run_crt_backtest(
         sig = str(df["signal"].iloc[i])
         if sig == "SKIP":
             continue
-        stake = trade_usd_from_capital(capital)
+        stake = trade_usd_from_capital(capital, max_stake_usd=acct.max_stake_usd)
         if stake <= 0:
             break
         fu = df["fwd_up"].iloc[i]

@@ -97,6 +97,27 @@ def gamma_event_slug_url() -> str:
     ).rstrip("/")
 
 
+def gamma_http_headers() -> dict[str, str]:
+    """
+    Headers for **read-only** Gamma HTTP calls (slug event lookup).
+
+    Some networks return **403** if requests look like anonymous bots. Defaults add
+    ``Accept`` + ``Referer``; set ``HTTP_USER_AGENT`` to a normal browser string on VPS if needed.
+    Optional ``POLYMARKET_GAMMA_AUTHORIZATION`` sends ``Authorization`` (e.g. ``Bearer …``) when your
+    Polymarket / Gamma tier requires it.
+    """
+    h: dict[str, str] = {
+        "User-Agent": http_user_agent(),
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": env_str("POLYMARKET_GAMMA_REFERER", "https://polymarket.com/"),
+    }
+    auth = env_optional_str("POLYMARKET_GAMMA_AUTHORIZATION")
+    if auth:
+        h["Authorization"] = auth
+    return h
+
+
 def polygon_rpc_url_candidates() -> list[str]:
     """
     Ordered Polygon HTTP JSON-RPC endpoints for read-only calls (Chainlink, etc.).

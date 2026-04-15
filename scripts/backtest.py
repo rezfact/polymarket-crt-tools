@@ -91,6 +91,13 @@ def main() -> int:
     p.add_argument("--range-lookback", type=int, default=24)
     p.add_argument("--initial-capital", type=float, default=10_000.0, help="starting bankroll (USD)")
     p.add_argument(
+        "--max-stake-usd",
+        type=float,
+        default=10.0,
+        metavar="USD",
+        help="per-trade stake cap after 10%%×capital rule (default 10; use 1 for micro bankroll tests)",
+    )
+    p.add_argument(
         "--yes-entry-mid",
         type=float,
         default=0.5,
@@ -215,6 +222,7 @@ def main() -> int:
         yes_entry_mid=args.yes_entry_mid,
         no_entry_mid=args.no_entry_mid,
         fee_roundtrip_bps=args.fee_roundtrip_bps,
+        max_stake_usd=float(args.max_stake_usd),
         take_profit_tiers=args.tp_tiers,
         take_profit_bridge_steps=max(2, int(args.tp_bridge_steps)),
     )

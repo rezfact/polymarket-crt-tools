@@ -9,6 +9,8 @@ Candidates: ``POLYMARKET_HTF_PYTHON`` (must be a venv), ``.venv313/bin/python``,
 Disable with ``POLYMARKET_HTF_NO_VENV_REEXEC=1``.
 
 Logs JSONL events; tune flags to benchmark vs a simpler baseline (e.g. ``--entry-mode``).
+Optional ``--wss-preset continuation`` bundles fib / entry / pullback / gamma-dev (see ``wss_watch_presets``).
+``--diag-interval-sec`` emits ``wss_diag`` rows during each live window (why ``timeout`` vs fill).
 Optional unified eval copy: env ``STRATEGY_EVAL_JOURNAL`` / ``LIVE_EVAL_JOURNAL`` (same as ``dryrun.py``).
 """
 from __future__ import annotations
@@ -105,6 +107,33 @@ def main() -> int:
         metavar="P",
         help="skip arm when entry mid > P (e.g. 0.88 to avoid paying 0.93 for DOWN)",
     )
+    p.add_argument(
+        "--wss-preset",
+        choices=["default", "continuation"],
+        default="default",
+        help="bundle fib / entry window / pullback / gamma-dev (see polymarket_htf.wss_watch_presets)",
+    )
+    p.add_argument(
+        "--diag-interval-sec",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="emit periodic wss_diag rows during [T,T_end) (VPS tuning; omit to disable)",
+    )
+    p.add_argument(
+        "--arm-require-htf-rp-ge",
+        type=float,
+        default=None,
+        metavar="R",
+        help="UP arms only if signal bar htf_rp_c1 >= R (e.g. 0.55)",
+    )
+    p.add_argument(
+        "--arm-require-htf-rp-le",
+        type=float,
+        default=None,
+        metavar="R",
+        help="DOWN arms only if signal bar htf_rp_c1 <= R (e.g. 0.45)",
+    )
     args = p.parse_args()
 
     from polymarket_htf.config_env import load_dotenv_files
@@ -120,6 +149,7 @@ def main() -> int:
         from polymarket_htf.crt_strategy import CRTParams
         from polymarket_htf.journal import append_jsonl_with_eval_mirror, utc_now_iso
         from polymarket_htf.watch_session import SweetSpotWatchParams, SweetSpotWatchSession
+        from polymarket_htf.wss_watch_presets import apply_sweet_spot_watch_preset
     except ModuleNotFoundError as e:
         req = ROOT / "requirements.txt"
         if using_project_venv(ROOT):
@@ -178,7 +208,11 @@ def main() -> int:
         chainlink_stale_sec=args.chainlink_stale_sec,
         enable_signal_revoke=not args.no_signal_revoke,
         sticky_arm=bool(args.sticky_arm),
+        arm_require_htf_rp_ge=args.arm_require_htf_rp_ge,
+        arm_require_htf_rp_le=args.arm_require_htf_rp_le,
+        diag_interval_sec=args.diag_interval_sec,
     )
+    prm = apply_sweet_spot_watch_preset(prm, str(args.wss_preset))
     sess = SweetSpotWatchSession(prm)
 
     while True:

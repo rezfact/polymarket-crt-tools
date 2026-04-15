@@ -23,3 +23,21 @@ def test_wss_preset_coarse_spot_relaxes_gates() -> None:
     assert p1.fib_hi >= 0.82
     assert p1.entry_end_buffer_sec <= 45.0
     assert p1.entry_first_minutes >= 12.0
+
+
+def test_wss_preset_continuation_relaxes_gates() -> None:
+    p0 = WssMonthSimParams(
+        pullback_frac=0.0008,
+        fib_lo=0.618,
+        fib_hi=0.786,
+        entry_end_buffer_sec=90.0,
+        entry_first_minutes=8.0,
+        max_gamma_outcome_deviation=0.12,
+    )
+    p1 = apply_wss_month_preset(p0, "continuation")
+    assert p1.pullback_frac <= 0.00055
+    assert p1.fib_lo <= 0.56
+    assert p1.fib_hi >= 0.83
+    assert p1.entry_end_buffer_sec <= 55.0
+    assert p1.entry_first_minutes >= 14.0
+    assert p1.max_gamma_outcome_deviation >= 0.14

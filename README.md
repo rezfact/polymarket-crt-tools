@@ -52,6 +52,9 @@ python scripts/redeem_wins.py --execute
 | `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` | If unset, importing HTTP helpers may set them from **certifi** (helps some macOS Python builds). |
 | `REQUESTS_VERIFY` | Set to `0` / `false` to disable TLS verify (insecure; debugging only). |
 | `POLYMARKET_GAMMA_EVENT_SLUG_URL` | Override Gamma base (default `…/events/slug`) |
+| `HTTP_USER_AGENT` | Sent on Gamma (and Binance) requests; use a normal browser string on VPS if Gamma returns **403**. |
+| `POLYMARKET_GAMMA_REFERER` | Referer header for Gamma (default `https://polymarket.com/`) |
+| `POLYMARKET_GAMMA_AUTHORIZATION` | Optional `Authorization` value (e.g. `Bearer …`) if your tier requires it |
 | `BINANCE_KLINES_URL` | Override REST origin if your network blocks `api.binance.com` (default `https://api.binance.com/api/v3/klines`) |
 
 ### Binance Vision (bulk files)

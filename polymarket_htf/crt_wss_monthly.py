@@ -6,6 +6,9 @@ CRT OHLC uses :func:`polymarket_htf.crt_strategy.build_exec_frame` (Pyth by defa
 WSS simulation can use **Binance 1m closes** as a Chainlink **spot proxy** (or ``crt_15m`` / presets) inside each Polymarket
 ``[T, T_end)`` window (same pullback / fib / entry-window rules as :class:`SweetSpotWatchParams`).
 Gamma checks are optional (``skip_gamma=True`` avoids HTTP during long runs).
+
+Each ``paper_fill`` row includes a **research** window settlement proxy (first vs last close in the
+slice) plus ``side_win``; aggregate WR/PnL via :func:`polymarket_htf.backtest_crt.summarize_wss_sim_fills`.
 """
 from __future__ import annotations
 
@@ -117,6 +120,48 @@ class WssMonthSimParams:
     pullback_frac: float = 0.0008
     fib_lo: float = 0.618
     fib_hi: float = 0.786
+
+
+def wss_proxy_settlement_from_slice(spot_window: pd.DataFrame, *, side: str) -> dict[str, Any]:
+    """
+    Research-only **Polymarket window** proxy using the same spot feed as the WSS sim:
+
+    - ``spot_window_open`` / ``spot_window_settle``: first and last **close** in the ``[T, T_end)``
+      slice (Binance 1m proxy or CRT 15m closes).
+    - ``underlying_up``: ``settle > open`` (strict). Ties → ``settlement_tie`` and no ``side_win``.
+    - ``side_win``: whether the **armed** ``side`` (UP/DOWN) wins that binary.
+    """
+    w = spot_window.sort_index()
+    if w.empty or "close" not in w.columns:
+        return {
+            "spot_window_open": None,
+            "spot_window_settle": None,
+            "settlement_tie": False,
+            "underlying_up": None,
+            "side_win": None,
+            "settlement_note": "empty_spot_window",
+        }
+    o = float(w.iloc[0]["close"])
+    s = float(w.iloc[-1]["close"])
+    if o == s:
+        return {
+            "spot_window_open": o,
+            "spot_window_settle": s,
+            "settlement_tie": True,
+            "underlying_up": None,
+            "side_win": None,
+            "settlement_note": "open_eq_settle",
+        }
+    underlying_up = s > o
+    win = (str(side) == "UP" and underlying_up) or (str(side) == "DOWN" and not underlying_up)
+    return {
+        "spot_window_open": o,
+        "spot_window_settle": s,
+        "settlement_tie": False,
+        "underlying_up": underlying_up,
+        "side_win": win,
+        "settlement_note": None,
+    }
 
 
 def _spot_step_seconds(index: pd.DatetimeIndex, *, default: int = 60) -> int:
@@ -254,11 +299,13 @@ def simulate_wss_window(
         if not spot_in_fib_zone(spot, side, zone):
             continue
 
+        settle_extras = wss_proxy_settlement_from_slice(spot_window, side=side)
         return {
             **base,
             "result": "paper_fill",
             "fill_ts": pd.Timestamp(now_sec, unit="s", tz="UTC").isoformat(),
             "spot": spot,
+            **settle_extras,
         }
 
     return {**base, "result": "timeout"}

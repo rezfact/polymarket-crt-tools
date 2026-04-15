@@ -28,5 +28,9 @@ def test_cap_at_200_still_10() -> None:
     assert trade_usd_from_capital(200) == 10.0
 
 
+def test_custom_max_stake_1() -> None:
+    assert trade_usd_from_capital(200, max_stake_usd=1.0) == 1.0
+
+
 def test_uncapped_when_max_disabled() -> None:
     assert trade_usd_from_capital(200, max_stake_usd=None) == 20.0

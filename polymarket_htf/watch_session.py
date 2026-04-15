@@ -8,6 +8,7 @@ No orders — emits structured events for logging / benchmarking. Tune via :clas
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -15,7 +16,7 @@ from typing import Any, Literal
 from polymarket_htf.assets import normalize_asset
 from polymarket_htf.chainlink_btc import fetch_chainlink_btc_usd
 from polymarket_htf.crt_strategy import CRTParams, last_signal_completed_bar
-from polymarket_htf.fib_entry import fib_pullback_zone, spot_in_fib_zone
+from polymarket_htf.fib_entry import fib_pullback_zone, fib_spot_metrics, spot_in_fib_zone
 from polymarket_htf.gamma import (
     build_updown_slug,
     exec_interval_to_polymarket_tf_minutes,
@@ -73,6 +74,13 @@ class SweetSpotWatchParams:
     # Use for paper runs where bar-to-bar CRT flip is noise vs the Polymarket window you already armed.
     sticky_arm: bool = False
 
+    # Optional arm filters (HTF on **signal bar**; same field as dryrun ``htf_rp_c1``).
+    arm_require_htf_rp_ge: float | None = None  # UP: require ``htf_rp_c1 >=`` this
+    arm_require_htf_rp_le: float | None = None  # DOWN: require ``htf_rp_c1 <=`` this
+
+    # Periodic ``wss_diag`` rows during ``[T, T_end)`` (seconds between rows; ``None`` = off).
+    diag_interval_sec: float | None = None
+
 
 def _entry_window_ok(*, now: float, T: float, T_end: float, p: SweetSpotWatchParams) -> bool:
     if now < T or now >= T_end - p.entry_end_buffer_sec:
@@ -114,6 +122,7 @@ class SweetSpotWatchSession:
         self._session_spot_hi: float | None = None
         self._session_spot_lo: float | None = None
         self._pullback_ok: bool = False
+        self._last_diag_ts: float = 0.0
 
     def _gamma_entry_gate_blocks(self, sig: dict[str, Any], out: list[dict[str, Any]]) -> bool:
         """If side-price gate is configured and fails, append ``skip_arm`` and return True."""
@@ -165,6 +174,36 @@ class SweetSpotWatchSession:
         T_end = T + float(p.tf_minutes * 60)
         slug = build_updown_slug(self._asset, tf_minutes=p.tf_minutes, window_open_ts=int(next_wo))
         side = str(sig["side"])
+        rp_raw = sig.get("htf_rp_c1")
+        if side == "UP" and p.arm_require_htf_rp_ge is not None:
+            if rp_raw is None or not isinstance(rp_raw, (int, float)) or not math.isfinite(float(rp_raw)):
+                out.append({"kind": "skip_arm", "reason": "htf_rp_missing_for_gate", "side": side})
+                return False
+            if float(rp_raw) < float(p.arm_require_htf_rp_ge):
+                out.append(
+                    {
+                        "kind": "skip_arm",
+                        "reason": "htf_rp_gate_up",
+                        "htf_rp_c1": float(rp_raw),
+                        "need_ge": float(p.arm_require_htf_rp_ge),
+                    }
+                )
+                return False
+        if side == "DOWN" and p.arm_require_htf_rp_le is not None:
+            if rp_raw is None or not isinstance(rp_raw, (int, float)) or not math.isfinite(float(rp_raw)):
+                out.append({"kind": "skip_arm", "reason": "htf_rp_missing_for_gate", "side": side})
+                return False
+            if float(rp_raw) > float(p.arm_require_htf_rp_le):
+                out.append(
+                    {
+                        "kind": "skip_arm",
+                        "reason": "htf_rp_gate_down",
+                        "htf_rp_c1": float(rp_raw),
+                        "need_le": float(p.arm_require_htf_rp_le),
+                    }
+                )
+                return False
+
         self._mon = _Monitor(
             slug=slug,
             side=side,
@@ -180,6 +219,7 @@ class SweetSpotWatchSession:
         self._session_spot_hi = None
         self._session_spot_lo = None
         self._pullback_ok = False
+        self._last_diag_ts = 0.0
         out.append(
             {
                 "kind": "arm",
@@ -279,7 +319,51 @@ class SweetSpotWatchSession:
             if spot >= self._session_spot_lo * (1.0 + self.p.pullback_frac):
                 self._pullback_ok = True
 
-        if not _entry_window_ok(now=now, T=m.T, T_end=m.T_end, p=self.p):
+        win_ok = _entry_window_ok(now=now, T=m.T, T_end=m.T_end, p=self.p)
+        iv = self.p.diag_interval_sec
+        if iv is not None and float(iv) > 0 and now >= m.T and now < m.T_end:
+            if self._last_diag_ts == 0.0 or now - self._last_diag_ts >= float(iv):
+                fib_m = fib_spot_metrics(spot, m.fib_zone)
+                ev_d = fetch_event_by_slug(m.slug)
+                dev_d = gamma_outcome_sum_deviation(ev_d) if ev_d is not None else None
+                gam_ok: bool | None = None
+                gam_reason: str | None = None
+                if ev_d is None:
+                    gam_reason = "gamma_404"
+                elif self.p.require_gamma_active and (not ev_d.get("active") or ev_d.get("closed")):
+                    gam_ok = False
+                    gam_reason = "gamma_inactive"
+                else:
+                    gam_ok = True
+                dev_ok = None if dev_d is None else (dev_d <= self.p.max_gamma_outcome_deviation)
+                out.append(
+                    {
+                        "kind": "wss_diag",
+                        "slug": m.slug,
+                        "side": m.side,
+                        "now": now,
+                        "secs_to_T_end": float(m.T_end - now),
+                        "entry_window_ok": win_ok,
+                        "pullback_ok": bool(self._pullback_ok),
+                        "fib_zone": list(m.fib_zone),
+                        "in_fib": bool(fib_m["in_fib"]),
+                        "dist_below_fib_lo": float(fib_m["dist_below_fib_lo"]),
+                        "dist_above_fib_hi": float(fib_m["dist_above_fib_hi"]),
+                        "spot": spot,
+                        "gamma_dev": dev_d,
+                        "gamma_dev_ok": dev_ok,
+                        "gamma_active_ok": gam_ok,
+                        "gamma_reason": gam_reason,
+                        "crt_side": sig.get("side"),
+                        "crt_htf_rp_c1": sig.get("htf_rp_c1"),
+                        "crt_bar_ts": sig.get("timestamp"),
+                        "armed_bar_ts": m.armed_bar_ts,
+                        "chainlink_age_sec": float(now - float(cl.updated_at)),
+                    }
+                )
+                self._last_diag_ts = now
+
+        if not win_ok:
             return out
 
         ev = fetch_event_by_slug(m.slug)

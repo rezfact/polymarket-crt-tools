@@ -9,6 +9,16 @@ Example (all of January 2026 UTC, ~2976 bars ≈ 96/day):
   ./scripts/month_crt_wss.py --asset btc --start 2026-01-01 --end 2026-02-01 \\
     --crt-bars-out var/crt_bars_2026-01.jsonl --wss-out var/wss_sim_2026-01.jsonl
 
+**90d signal + WSS** (same script; use ``--end`` exclusive, e.g. 90 calendar days):
+
+  ./scripts/month_crt_wss.py --asset btc --start 2026-01-01 --end 2026-04-01 \\
+    --wss-spot-source binance_1m --wss-preset continuation \\
+    --crt-bars-out var/crt_90d.jsonl --wss-out var/wss_90d.jsonl
+
+Printed **WSS WR / PnL** uses flat stake + share mids (same knobs as toy CRT). Settlement is a
+**research proxy**: first vs last close in each Polymarket window slice (not on-chain Chainlink).
+Re-summarize: ``./scripts/analyze_crt_exports.py var/crt_90d.jsonl --wss var/wss_90d.jsonl``.
+
 Notes:
 
 - **96/day** = ``24 * 60 / 15`` fifteen-minute bars per asset (UTC calendar bars from the feed).
@@ -24,8 +34,9 @@ Notes:
 ``loose_htf`` if you want HTF on with widened bands). Optional: ``--crt-distribution-buffer-frac``.
 
 **More meaningful WSS sim:** prefer ``--wss-spot-source binance_1m`` when Binance is reachable.
-With ``crt_15m``, expect mostly ``timeout`` unless you add ``--wss-preset coarse_spot`` (relaxed
-gates, **research only** — still not a substitute for 1m spot).
+With ``crt_15m``, expect mostly ``timeout`` unless you add ``--wss-preset coarse_spot`` (aggressive,
+**research only**) or ``continuation`` (aligned with live ``watch_sweet_spot --wss-preset continuation``).
+Proper 1m spot remains ``--wss-spot-source binance_1m`` when reachable.
 
 **VPS / ``.env``:** load ``.env`` from the repo root (``python-dotenv``). Defaults for this script
 use the ``CRT_MONTH_*`` variables — see ``.env.example``. CLI flags override ``.env``.
@@ -192,7 +203,7 @@ def main() -> int:
     )
     p.add_argument(
         "--wss-preset",
-        choices=["default", "coarse_spot"],
+        choices=["default", "coarse_spot", "continuation"],
         default=d["wss_preset"],
         help="WSS month preset (env: CRT_MONTH_WSS_PRESET)",
     )
@@ -280,7 +291,7 @@ def main() -> int:
             simulate_wss_for_crt_frame,
         )
         from polymarket_htf.assets import binance_symbol, normalize_asset
-        from polymarket_htf.backtest_crt import summarize_toy_crt_trades
+        from polymarket_htf.backtest_crt import summarize_toy_crt_trades, summarize_wss_sim_fills
     except ModuleNotFoundError as e:
         req = ROOT / "requirements.txt"
         if using_project_venv(ROOT):
@@ -448,6 +459,20 @@ def main() -> int:
     nd = sum(1 for r in sim_rows if r.get("result") in ("no_1m_data", "no_spot_data"))
     print(
         f"wss_sim windows={len(sim_rows)} paper_fill={fills} timeout={to} no_1m_data={nd} -> {wss_path.resolve()}",
+        flush=True,
+    )
+    wss_pnl = summarize_wss_sim_fills(
+        sim_rows,
+        stake_usd=float(args.toy_stake_usd),
+        yes_entry_mid=float(args.toy_yes_mid),
+        no_entry_mid=args.toy_no_mid,
+        fee_roundtrip_bps=float(args.toy_fee_roundtrip_bps),
+    )
+    print(
+        "wss_pnl_proxy (first/last close in window vs toy stake/mids; see docstring): "
+        f"settled={wss_pnl['settled_trades']} wins={wss_pnl['wins']} "
+        f"ties={wss_pnl['settlement_ties']} wr={wss_pnl['win_rate']!s} "
+        f"pnl_net_usd={float(wss_pnl['pnl_net_usd']):.2f}",
         flush=True,
     )
     return 0

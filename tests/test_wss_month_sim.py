@@ -36,6 +36,11 @@ def test_simulate_wss_paper_fill_up_after_pullback() -> None:
     assert out["result"] == "paper_fill"
     assert out["side"] == "UP"
     assert "fill_ts" in out
+    assert out.get("settlement_tie") is False
+    assert out.get("underlying_up") is False
+    assert out.get("side_win") is False
+    assert float(out["spot_window_open"]) == 100.0
+    assert float(out["spot_window_settle"]) == 96.2
 
 
 def test_simulate_wss_no_1m() -> None:

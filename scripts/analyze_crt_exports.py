@@ -13,6 +13,8 @@ Example::
   ./.venv313/bin/python scripts/analyze_crt_exports.py var/crt_test.jsonl --wss var/wss_test.jsonl
   ./.venv313/bin/python scripts/analyze_crt_exports.py var/crt_bars_2026-01.jsonl \\
     --range-start 2026-01-01 --range-end 2026-01-08 --toy-stake-usd 10
+
+WSS **paper_fill** rows include a window open/settle proxy; ``--wss`` adds WR/PnL (same stake/mids flags).
 """
 from __future__ import annotations
 
@@ -126,7 +128,11 @@ def main() -> int:
     try:
         import pandas as pd
 
-        from polymarket_htf.backtest_crt import share_settlement, summarize_toy_crt_trades
+        from polymarket_htf.backtest_crt import (
+            share_settlement,
+            summarize_toy_crt_trades,
+            summarize_wss_sim_fills,
+        )
     except ModuleNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -292,23 +298,83 @@ def main() -> int:
         print(f"error: --wss not a file: {wss_path}", file=sys.stderr)
         return 2
     wss_rows = _load_wss_records(wss_path)
+
+    def _wss_row_in_range(r: dict[str, Any]) -> bool:
+        if rs is None and re is None:
+            return True
+        ts = str(r.get("arm_bar_ts") or "")
+        if not ts:
+            return False
+        return _in_time_range(ts, rs, re)
+
+    wss_in = [r for r in wss_rows if _wss_row_in_range(r)]
     print(f"# WSS sim: `{wss_path}`")
-    print(f"rows={len(wss_rows)}")
+    print(f"rows={len(wss_rows)} rows_in_range={len(wss_in)}  range_start={args.range_start!r} range_end={args.range_end!r}")
     print()
-    print("## WSS result (all rows)")
-    rc: Counter[str] = Counter(str(r.get("result", "?")) for r in wss_rows)
-    total = len(wss_rows) or 1
+    print("## WSS result (rows in range)")
+    rc: Counter[str] = Counter(str(r.get("result", "?")) for r in wss_in)
+    total = len(wss_in) or 1
     wrows = [(res, cnt, f"{100.0 * cnt / total:.1f}%") for res, cnt in rc.most_common()]
     _print_md_table(("result", "count", "pct"), wrows, ("l", "r", "r"))
     print()
 
-    print("## WSS result × side")
+    print("## WSS result × side (in range)")
     cross: Counter[tuple[str, str]] = Counter()
-    for r in wss_rows:
+    for r in wss_in:
         cross[(str(r.get("side", "?")), str(r.get("result", "?")))] += 1
     crows = [(a, b, c) for (a, b), c in sorted(cross.items())]
     _print_md_table(("side", "result", "count"), crows, ("l", "l", "r"))
     print()
+
+    wpnl = summarize_wss_sim_fills(
+        wss_in,
+        stake_usd=float(args.toy_stake_usd),
+        yes_entry_mid=float(args.toy_yes_mid),
+        no_entry_mid=args.toy_no_mid,
+        fee_roundtrip_bps=float(args.toy_fee_roundtrip_bps),
+    )
+    print("## WSS paper_fill — proxy settlement WR / PnL (flat stake, share mids)")
+    print(
+        f"first/last close in each window; stake_usd={wpnl['stake_usd']:.2f} "
+        f"yes_mid={float(args.toy_yes_mid):.3f} fee_roundtrip_bps={float(args.toy_fee_roundtrip_bps):.1f}"
+    )
+    if int(wpnl["paper_fills"]) == 0:
+        print("_(no paper_fill rows in range)_\n")
+    else:
+        wrs = wpnl["win_rate"]
+        wr_cell = "—" if wrs is None else f"{float(wrs) * 100:.2f}%"
+        _print_md_table(
+            (
+                "paper_fills",
+                "settled",
+                "ties",
+                "wins",
+                "losses",
+                "win_rate",
+                "pnl_gross_usd",
+                "fees_usd",
+                "pnl_net_usd",
+            ),
+            [
+                (
+                    wpnl["paper_fills"],
+                    wpnl["settled_trades"],
+                    wpnl["settlement_ties"],
+                    wpnl["wins"],
+                    wpnl["losses"],
+                    wr_cell,
+                    f"{float(wpnl['pnl_gross_usd']):.2f}",
+                    f"{float(wpnl['fees_usd']):.2f}",
+                    f"{float(wpnl['pnl_net_usd']):.2f}",
+                )
+            ],
+            ("r", "r", "r", "r", "r", "r", "r", "r", "r"),
+        )
+        if int(wpnl.get("legacy_missing_settlement") or 0) > 0:
+            print(
+                f"_(warn: {wpnl['legacy_missing_settlement']} paper_fill rows lack settlement fields — re-run month_crt_wss)_"
+            )
+        print()
 
     return 0
 

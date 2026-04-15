@@ -40,3 +40,15 @@ def spot_in_fib_zone(spot: float, side: str, zone: tuple[float, float]) -> bool:
     """Whether ``spot`` lies in the pullback band."""
     lo, hi = zone
     return lo <= float(spot) <= hi
+
+
+def fib_spot_metrics(spot: float, zone: tuple[float, float]) -> dict[str, float | bool]:
+    """Distance below band low / above band high (0 when inside) + ``in_fib``."""
+    lo, hi = float(zone[0]), float(zone[1])
+    s = float(spot)
+    inside = lo <= s <= hi
+    return {
+        "in_fib": inside,
+        "dist_below_fib_lo": max(0.0, lo - s),
+        "dist_above_fib_hi": max(0.0, s - hi),
+    }

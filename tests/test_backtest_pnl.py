@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from polymarket_htf.backtest_crt import _pnl_binary, share_settlement, summarize_toy_crt_trades
+from polymarket_htf.backtest_crt import (
+    _pnl_binary,
+    share_settlement,
+    summarize_toy_crt_trades,
+    summarize_wss_sim_fills,
+)
 
 
 def test_pnl_up_win_50c() -> None:
@@ -61,6 +66,40 @@ def test_summarize_toy_crt_trades_down_loss_when_next_up() -> None:
     assert out["trades"] == 1
     assert out["wins"] == 0
     assert abs(float(out["pnl_net_usd"]) + 10.0) < 1e-9
+
+
+def test_summarize_wss_sim_fills_one_up_win() -> None:
+    rows = [
+        {
+            "kind": "wss_sim",
+            "result": "paper_fill",
+            "side": "UP",
+            "settlement_tie": False,
+            "side_win": True,
+        }
+    ]
+    out = summarize_wss_sim_fills(rows, stake_usd=10.0, yes_entry_mid=0.5)
+    assert out["paper_fills"] == 1
+    assert out["settled_trades"] == 1
+    assert out["wins"] == 1
+    assert abs(float(out["pnl_net_usd"]) - 10.0) < 1e-9
+
+
+def test_summarize_wss_sim_fills_skips_tie() -> None:
+    rows = [
+        {
+            "kind": "wss_sim",
+            "result": "paper_fill",
+            "side": "UP",
+            "settlement_tie": True,
+            "side_win": None,
+        }
+    ]
+    out = summarize_wss_sim_fills(rows, stake_usd=10.0)
+    assert out["paper_fills"] == 1
+    assert out["settlement_ties"] == 1
+    assert out["settled_trades"] == 0
+    assert out["win_rate"] is None
 
 
 def test_capital_updates_with_fee_on_win() -> None:

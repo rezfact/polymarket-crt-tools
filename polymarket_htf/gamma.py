@@ -22,7 +22,7 @@ from polymarket_htf.assets import slug_token, supported_assets
 from polymarket_htf.config_env import (
     ensure_certifi_ssl_env,
     gamma_event_slug_url,
-    http_user_agent,
+    gamma_http_headers,
     tls_verify_requests,
 )
 from polymarket_htf.http_retry import requests_get_response
@@ -31,16 +31,22 @@ ensure_certifi_ssl_env()
 
 
 def _get_json_or_none(url: str, *, timeout: float = 25.0) -> Any | None:
-    r = requests_get_response(
-        url,
-        headers={"User-Agent": http_user_agent()},
-        timeout=timeout,
-        verify=tls_verify_requests(),
-    )
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-    return r.json()
+    """404 → ``None``; 403 → one short sleep + retry (transient CDN / edge quirks)."""
+    for attempt in (0, 1):
+        r = requests_get_response(
+            url,
+            headers=gamma_http_headers(),
+            timeout=timeout,
+            verify=tls_verify_requests(),
+        )
+        if r.status_code == 404:
+            return None
+        if r.status_code == 403 and attempt == 0:
+            time.sleep(0.75)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError("gamma _get_json_or_none: unreachable")
 
 
 def updown_window_candidate_ids(
