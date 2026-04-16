@@ -148,7 +148,12 @@ def handle_one_fill(
     out["token_id"] = token_id
     out["clob_side"] = clob_side
 
-    price, size, meta = plan_buy_limit_notional(client=client, token_id=token_id, max_usd=float(max_usd))
+    try:
+        price, size, meta = plan_buy_limit_notional(client=client, token_id=token_id, max_usd=float(max_usd))
+    except Exception as e:
+        out["result"] = "skip_clob_book"
+        out["clob_book_error"] = f"{type(e).__name__}: {e}"[:500]
+        return out
     out.update({"price": price, "size": size, "approx_usd": round(price * size, 6), "plan_meta": meta})
     addr = redeem_query_address()
     out["signer"] = addr
