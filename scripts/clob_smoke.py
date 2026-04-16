@@ -17,54 +17,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-
-def _parse_midpoint(raw: object) -> float:
-    if isinstance(raw, dict) and "mid" in raw:
-        return float(raw["mid"])
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    return float(str(raw).strip())
-
-
-def _round_down_tick(price: float, tick: float) -> float:
-    t = float(tick)
-    if t <= 0:
-        return float(price)
-    return math.floor(float(price) / t + 1e-12) * t
-
-
-def _plan_buy(*, client, token_id: str, max_usd: float) -> tuple[float, float, dict]:
-    mid = _parse_midpoint(client.get_midpoint(token_id))
-    tick = float(client.get_tick_size(token_id))
-    book = client.get_order_book(token_id)
-    min_sz = float(book.min_order_size or "1")
-    best_bid = float(book.bids[0].price) if book.bids else max(tick, mid - tick)
-    price = _round_down_tick(min(best_bid, mid), tick)
-    if price < tick:
-        price = tick
-    if price > 1.0 - tick:
-        price = 1.0 - tick
-    max_sh = max_usd / price
-    size = math.floor(max_sh * 1_000_000) / 1_000_000
-    if size < min_sz:
-        size = min_sz
-    if price * size > max_usd + 1e-6:
-        size = math.floor((max_usd / price) * 1_000_000) / 1_000_000
-    if size < min_sz:
-        raise ValueError(
-            f"LIVE_SMOKE_MAX_USD={max_usd} too small for min_order_size={min_sz} at price={price} "
-            f"(need ≥ {min_sz * price:.2f} USDC)"
-        )
-    meta = {"mid": mid, "tick": tick, "min_order_size": min_sz, "best_bid": best_bid}
-    return price, size, meta
 
 
 def main() -> int:
@@ -95,6 +53,7 @@ def main() -> int:
     load_dotenv_files(project_root=ROOT)
 
     from polymarket_htf.clob_account import make_trading_clob_client
+    from polymarket_htf.clob_plan import plan_buy_limit_notional
     from polymarket_htf.journal import append_jsonl_with_eval_mirror, utc_now_iso
     from polymarket_htf.redeem import redeem_query_address
 
@@ -130,7 +89,7 @@ def main() -> int:
         token_id = up_id if args.side == "up" else down_id
 
     addr = redeem_query_address()
-    price, size, meta = _plan_buy(client=client, token_id=token_id, max_usd=max_usd)
+    price, size, meta = plan_buy_limit_notional(client=client, token_id=token_id, max_usd=max_usd)
     plan = {
         "kind": "clob_smoke_plan",
         "ts": utc_now_iso(),

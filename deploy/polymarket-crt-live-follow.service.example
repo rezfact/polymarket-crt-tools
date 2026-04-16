@@ -1,0 +1,28 @@
+# Example only — copy to /etc/systemd/system/ and edit before enable.
+# Ships **disabled**: one guarded CLOB BUY per new ``paper_fill`` in sweet-spot JSONL.
+#
+# Preconditions in WorkingDirectory/.env:
+#   LIVE_TRADING_ENABLED=1
+#   POLYGON_PRIVATE_KEY (+ builder + funder if required)
+#   Optional LIVE_KILL_SWITCH_PATH, LIVE_FOLLOW_PAPER_MAX_USD, LIVE_TRADING_MIN_COLLATERAL_USD
+#
+# Keep ``polymarket-crt-sweet-spot.service`` running; this unit only **reads** its journal.
+
+[Unit]
+Description=polymarket-crt-tools live follow (one CLOB BUY per paper_fill; optional)
+After=network-online.target polymarket-crt-sweet-spot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/polymarket-crt-tools
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/polymarket-crt-tools/.env
+ExecStart=/opt/polymarket-crt-tools/.venv/bin/python scripts/live_follow_paper_fill.py --journal var/watch_sweet_spot.jsonl --state-dir var/live_follow_paper --interval-sec 4 --execute
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

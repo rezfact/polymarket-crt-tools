@@ -1,5 +1,7 @@
 # VPS systemd (paper bots — no CLOB orders)
 
+For a **structured learning** loop (parallel paper + tiny live, stop rules, data when live is flat), see **`deploy/CONFIDENCE_RUNBOOK.md`**. On the VPS, run **`bash deploy/vps_confidence_check.sh`** from the repo root to verify paper units, validate **`.env`** (via **`deploy/check_vps_env.py`**, values hidden), and write **`var/LIVE_TEST_RULES.txt`**.
+
 ## Paper strategy bundle (what the shipped units run)
 
 | Unit | Role | Strategy knobs (in `ExecStart`) |
@@ -54,3 +56,5 @@ Prereq: `python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt` 
 **Verify:** `systemctl is-active polymarket-crt-dryrun.service polymarket-crt-sweet-spot.service` and `tail -f` the JSONL paths under `WorkingDirectory/var/`. After git pull, run `daemon-reload` and **restart** both units so `ExecStart` (e.g. WSS preset / diag) matches the new code.
 
 Optional **CLOB** cron (not enabled by default): `scripts/clob_health.py --strict`, `scripts/clob_reconcile.py`, and one-off `scripts/clob_smoke.py` (see `.env.example` ``LIVE_*`` keys).
+
+**Auto-follow paper fills (real orders):** `scripts/live_follow_paper_fill.py` tails `var/watch_sweet_spot.jsonl` and places **at most one** small CLOB BUY per new `paper_fill` when run with **`--execute`** and **`LIVE_TRADING_ENABLED=1`**. Example unit: `deploy/polymarket-crt-live-follow.service.example` (copy by hand; do not enable until `.env` is correct). See `deploy/CONFIDENCE_RUNBOOK.md` for risks.

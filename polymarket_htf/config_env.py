@@ -295,3 +295,19 @@ def live_kill_switch_path() -> Path | None:
 def live_trading_paused_by_file() -> bool:
     p = live_kill_switch_path()
     return bool(p and p.is_file())
+
+
+def live_follow_paper_max_usd() -> float:
+    """Max notional (price × size) per ``live_follow_paper_fill`` BUY (default ``1``)."""
+    return env_float("LIVE_FOLLOW_PAPER_MAX_USD", 1.0)
+
+
+def live_trading_min_collateral_usd() -> float | None:
+    """
+    When set, ``live_follow_paper_fill`` skips **new** BUYs if CLOB collateral balance is **≤** this
+    (e.g. ``1`` to match “do not trade past the last dollar” test rules).
+    """
+    raw = env_optional_str("LIVE_TRADING_MIN_COLLATERAL_USD")
+    if raw is None or not str(raw).strip():
+        return None
+    return float(str(raw).strip())
