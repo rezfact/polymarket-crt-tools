@@ -2,6 +2,11 @@
 """
 At most **one** small CLOB **BUY** per new ``paper_fill`` row in ``watch_sweet_spot`` JSONL.
 
+**Telegram:** set ``TELEGRAM_BOT_TOKEN`` and ``TELEGRAM_CHAT_ID`` (see ``.env.example``). When live
+mode is on (``--execute``), important outcomes are sent to Telegram. Disable with
+``LIVE_FOLLOW_TELEGRAM=0``. Add ``LIVE_FOLLOW_TELEGRAM_VERBOSE=1`` to also notify ``plan_only`` and
+every ``skip_clob_book`` (can be noisy).
+
 **Guards** (all must pass for ``--execute``):
 
 - ``LIVE_TRADING_ENABLED=1``
@@ -21,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import time
 from pathlib import Path
@@ -172,6 +178,60 @@ def handle_one_fill(
     return out
 
 
+def _live_follow_telegram_ok() -> bool:
+    if os.getenv("LIVE_FOLLOW_TELEGRAM", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    from polymarket_htf.telegram_notify import telegram_credentials_ok
+
+    return telegram_credentials_ok()
+
+
+def _notify_live_follow_result(res: dict, *, execute: bool) -> None:
+    from polymarket_htf.telegram_notify import send_telegram_message
+
+    if not _live_follow_telegram_ok():
+        return
+    r = str(res.get("result", ""))
+    verbose = os.getenv("LIVE_FOLLOW_TELEGRAM_VERBOSE", "").strip().lower() in ("1", "true", "yes")
+    if execute:
+        base = {
+            "order_posted",
+            "skip_low_collateral",
+            "skip_kill_switch",
+            "skip_live_disabled",
+            "skip_gamma_404",
+            "skip_no_clob_tokens",
+            "skip_bad_row",
+        }
+        if verbose:
+            base |= {"skip_clob_book", "plan_only"}
+        else:
+            base.add("skip_clob_book")
+        if r not in base:
+            return
+    else:
+        if not verbose or r != "plan_only":
+            return
+
+    lines = [
+        f"live_follow {r}",
+        f"slug={res.get('slug')}",
+        f"side={res.get('side')}",
+        f"fill_key={res.get('fill_key')}",
+    ]
+    if res.get("approx_usd") is not None:
+        lines.append(f"approx_usd={res.get('approx_usd')}")
+    if r == "skip_low_collateral":
+        lines.append(f"collateral_usd={res.get('collateral_balance_usd')}")
+    if r == "skip_clob_book" and res.get("clob_book_error"):
+        lines.append(str(res["clob_book_error"])[:400])
+    if r == "skip_gamma_404":
+        lines.append("gamma slug not found (expired or typo)")
+    if r == "order_posted" and res.get("response") is not None:
+        lines.append(f"response={str(res.get('response'))[:500]}")
+    send_telegram_message("\n".join(lines))
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="One guarded CLOB BUY per watch_sweet_spot paper_fill.")
     p.add_argument("--journal", type=Path, default=ROOT / "var" / "watch_sweet_spot.jsonl")
@@ -213,8 +273,15 @@ def main() -> int:
     )
 
     from polymarket_htf.clob_account import make_trading_clob_client
+    from polymarket_htf.telegram_notify import send_telegram_message
 
     client = make_trading_clob_client()
+
+    if args.execute and _live_follow_telegram_ok():
+        host = socket.gethostname()
+        send_telegram_message(
+            f"live_follow_paper_fill START --execute\nhost={host}\njournal={journal}\nmax_usd={max_usd}"
+        )
 
     processed = load_processed(processed_path)
     carry = b""
@@ -251,6 +318,7 @@ def main() -> int:
             )
             append_audit(audit_path, res)
             print(json.dumps(res, default=str))
+            _notify_live_follow_result(res, execute=bool(args.execute))
             append_processed(processed_path, fk)
             processed.add(fk)
 

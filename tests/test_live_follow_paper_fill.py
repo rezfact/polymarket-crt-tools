@@ -65,6 +65,23 @@ def test_handle_one_fill_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     assert r["token_id"] == "td"
 
 
+def test_notify_live_follow_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts import live_follow_paper_fill as mod
+
+    sent: list[str] = []
+
+    monkeypatch.setenv("LIVE_FOLLOW_TELEGRAM", "1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+    monkeypatch.setattr("polymarket_htf.telegram_notify.send_telegram_message", lambda text, **kw: sent.append(text) or True)
+
+    mod._notify_live_follow_result(
+        {"result": "order_posted", "slug": "s", "side": "UP", "fill_key": "k", "approx_usd": 1.0, "response": {"id": "x"}},
+        execute=True,
+    )
+    assert sent and "order_posted" in sent[0]
+
+
 def test_handle_low_collateral(monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts import live_follow_paper_fill as mod
 

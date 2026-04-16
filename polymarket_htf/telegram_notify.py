@@ -4,8 +4,8 @@ Send messages via **Telegram Bot API** (HTTPS ``sendMessage``).
 Requires ``TELEGRAM_BOT_TOKEN`` and ``TELEGRAM_CHAT_ID`` in the environment (or ``.env``).
 Optional: ``TELEGRAM_MESSAGE_THREAD_ID`` for forum/supergroup topics.
 
-Used by ``scripts/healthcheck_telegram.py`` and ``scripts/redeem_hourly.py``; wire the same
-helpers into a future live worker for CRT / WSS / PnL events.
+Used by ``scripts/healthcheck_telegram.py``, ``scripts/redeem_hourly.py``, and
+``scripts/live_follow_paper_fill.py`` (when ``TELEGRAM_*`` is set).
 """
 from __future__ import annotations
 

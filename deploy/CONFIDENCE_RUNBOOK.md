@@ -153,6 +153,8 @@ Example systemd unit (copy by hand, **not** installed by default): `deploy/polym
 
 **Caveats:** no sell / TP wiring; same-window risk as manual; race if two followers run; collateral API shape may vary — tune `polymarket_htf/clob_collateral.py` if your client returns a different JSON.
 
+**Telegram:** set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. With `--execute`, `live_follow_paper_fill` sends a **start** message and one message per important outcome (order posted, low collateral, kill-switch, missing book, etc.). Set `LIVE_FOLLOW_TELEGRAM=0` to turn off.
+
 ---
 
 ## Related docs
