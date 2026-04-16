@@ -4,6 +4,13 @@ from __future__ import annotations
 from typing import Any
 
 
+def _collateral_raw_to_usd(v: float) -> float:
+    """Polymarket CLOB often returns USDC collateral as an integer-style count of micro-units (1e6)."""
+    if v >= 500_000.0:
+        return v / 1_000_000.0
+    return v
+
+
 def clob_collateral_balance_usd(client: Any) -> float | None:
     """
     Return tradable **collateral** balance in USDC (best effort), or ``None`` if unavailable.
@@ -18,11 +25,11 @@ def clob_collateral_balance_usd(client: Any) -> float | None:
         if isinstance(r, dict):
             for k in ("balance", "available", "availableBalance"):
                 if k in r and r[k] is not None:
-                    return float(r[k])
+                    return _collateral_raw_to_usd(float(r[k]))
         if isinstance(r, (int, float)):
-            return float(r)
+            return _collateral_raw_to_usd(float(r))
         if isinstance(r, str):
-            return float(r.strip())
+            return _collateral_raw_to_usd(float(r.strip()))
     except Exception:
         return None
     return None
