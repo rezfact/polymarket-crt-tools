@@ -85,6 +85,29 @@ def test_summarize_wss_sim_fills_one_up_win() -> None:
     assert abs(float(out["pnl_net_usd"]) - 10.0) < 1e-9
 
 
+def test_summarize_wss_sim_fills_uses_gamma_entry_mid_at_fill() -> None:
+    rows = [
+        {
+            "kind": "wss_sim",
+            "result": "paper_fill",
+            "side": "UP",
+            "settlement_tie": False,
+            "side_win": True,
+            "gamma_entry_mid_at_fill": 0.9,
+        }
+    ]
+    out = summarize_wss_sim_fills(
+        rows,
+        stake_usd=10.0,
+        yes_entry_mid=0.5,
+        use_gamma_entry_mid_at_fill=True,
+    )
+    assert out["paper_fills"] == 1
+    assert out["settled_trades"] == 1
+    st = share_settlement(usdc_spent=10.0, win=True, side="UP", yes_mid=0.9, no_mid=None)
+    assert abs(float(out["pnl_net_usd"]) - st.pnl_gross) < 1e-9
+
+
 def test_summarize_wss_sim_fills_skips_tie() -> None:
     rows = [
         {

@@ -10,7 +10,7 @@ Group=deploy
 WorkingDirectory=/opt/polymarket-crt-tools
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/opt/polymarket-crt-tools/.env
-ExecStart=/opt/polymarket-crt-tools/.venv/bin/python scripts/watch_sweet_spot.py --asset btc --tf 15 --price-source pyth --interval-sec 5 --journal var/watch_sweet_spot.jsonl --crt-preset loose --crt-no-htf-filter --crt-sweep-conflict prefer_bull --sticky-arm --wss-preset continuation --diag-interval-sec 45
+ExecStart=/opt/polymarket-crt-tools/.venv/bin/python scripts/watch_sweet_spot.py --asset btc --tf 15 --price-source pyth --interval-sec 5 --journal var/watch_sweet_spot.jsonl --crt-preset loose --crt-no-htf-filter --crt-sweep-conflict prefer_bull --sticky-arm --wss-preset late_window_quality --diag-interval-sec 45 --settlement-stake-usd 1 --settlement-buffer-sec 60
 Restart=always
 RestartSec=20
 

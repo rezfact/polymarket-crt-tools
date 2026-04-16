@@ -5,7 +5,7 @@
 | Unit | Role | Strategy knobs (in `ExecStart`) |
 |------|------|----------------------------------|
 | `polymarket-crt-dryrun.service` | Live **CRT** log (`var/dryrun.jsonl`) | `--tf 15` `--price-source pyth` `--crt-preset loose` HTF off + sweep `prefer_bull`, bar-change logging |
-| `polymarket-crt-sweet-spot.service` | Live **WSS paper** (`var/watch_sweet_spot.jsonl`) | Same CRT bundle + **`--sticky-arm`** + **`--wss-preset continuation`** + **`--diag-interval-sec 45`** (`wss_diag` rows), Chainlink + fib + pullback |
+| `polymarket-crt-sweet-spot.service` | Live **WSS paper** (`var/watch_sweet_spot.jsonl`) | Same CRT bundle + **`--sticky-arm`** + **`--wss-preset late_window_quality`** (600s late + `max_retrace_frac=0.0009`) + **`--diag-interval-sec 45`** + **`--settlement-stake-usd 1`** (after each `paper_fill`, `paper_settlement` with Binance proxy + suggested PnL — not oracle cash). Use **`continuation`** only if you want the older, looser WSS bundle. |
 
 Edit **`User=`**, **`Group=`**, and **`WorkingDirectory=`** in each unit if your checkout is not `/opt/polymarket-crt-tools` or user is not `deploy`.
 
@@ -38,7 +38,7 @@ journalctl -u polymarket-crt-sweet-spot.service -f
 
 JSONL under repo `var/` (see `ExecStart` in each unit). Set `STRATEGY_EVAL_JOURNAL` in `.env` for a combined eval file.
 
-Sweet-spot unit: `wss_diag` lines (when `--diag-interval-sec` is set) explain gates during each live window (entry window, pullback, fib distance, Gamma deviation). Match local month sims with `scripts/month_crt_wss.py --wss-preset continuation`.
+Sweet-spot unit: `wss_diag` lines (when `--diag-interval-sec` is set) explain gates during each live window (entry window, pullback, `retrace_frac`, Gamma deviation). Match local month sims with `scripts/month_crt_wss.py --wss-preset late_window_quality` (or `continuation` if the unit uses that preset).
 
 Units load **`EnvironmentFile=-/opt/polymarket-crt-tools/.env`** so Gamma tuning applies without editing the unit. After copying updated units: `sudo systemctl daemon-reload && sudo systemctl restart polymarket-crt-dryrun.service polymarket-crt-sweet-spot.service`.
 

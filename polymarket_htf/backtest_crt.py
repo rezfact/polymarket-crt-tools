@@ -199,12 +199,17 @@ def summarize_wss_sim_fills(
     yes_entry_mid: float = 0.5,
     no_entry_mid: float | None = None,
     fee_roundtrip_bps: float = 0.0,
+    use_gamma_entry_mid_at_fill: bool = False,
 ) -> dict[str, float | int | None]:
     """
     Win rate and share-model PnL on ``kind=wss_sim`` rows with ``result=paper_fill``.
 
     Expects settlement fields from :func:`polymarket_htf.crt_wss_monthly.wss_proxy_settlement_from_slice`
     (``side_win``, ``settlement_tie``). Ties are counted but excluded from WR denominator.
+
+    When ``use_gamma_entry_mid_at_fill`` is True and a row has ``gamma_entry_mid_at_fill``, that value
+    is used as the **side** entry price (YES mid for UP, NO mid for DOWN); rows missing it fall back
+    to ``yes_entry_mid`` / ``no_entry_mid``.
     """
     fee_rt = float(fee_roundtrip_bps) / 10_000.0
     n_fill = 0
@@ -230,12 +235,26 @@ def summarize_wss_sim_fills(
         if win:
             wins += 1
         side = str(r.get("side", "SKIP"))
+        yes_m = float(yes_entry_mid)
+        no_m = no_entry_mid
+        if use_gamma_entry_mid_at_fill:
+            gfill = r.get("gamma_entry_mid_at_fill")
+            if gfill is not None:
+                try:
+                    gp = float(gfill)
+                except (TypeError, ValueError):
+                    gp = None
+                if gp is not None:
+                    if side == "UP":
+                        yes_m = gp
+                    elif side == "DOWN":
+                        no_m = gp
         st = share_settlement(
             usdc_spent=float(stake_usd),
             win=win,
             side=side,
-            yes_mid=float(yes_entry_mid),
-            no_mid=no_entry_mid,
+            yes_mid=yes_m,
+            no_mid=no_m,
         )
         fee = float(stake_usd) * fee_rt
         pnl_gross_sum += st.pnl_gross

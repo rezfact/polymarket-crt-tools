@@ -123,6 +123,12 @@ def main() -> int:
     p.add_argument("--toy-yes-mid", type=float, default=0.5)
     p.add_argument("--toy-no-mid", type=float, default=None)
     p.add_argument("--toy-fee-roundtrip-bps", type=float, default=0.0)
+    p.add_argument(
+        "--wss-pnl-use-gamma-entry",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="WSS PnL: use gamma_entry_mid_at_fill on each paper_fill when present",
+    )
     args = p.parse_args()
 
     try:
@@ -332,11 +338,13 @@ def main() -> int:
         yes_entry_mid=float(args.toy_yes_mid),
         no_entry_mid=args.toy_no_mid,
         fee_roundtrip_bps=float(args.toy_fee_roundtrip_bps),
+        use_gamma_entry_mid_at_fill=bool(args.wss_pnl_use_gamma_entry),
     )
     print("## WSS paper_fill — proxy settlement WR / PnL (flat stake, share mids)")
     print(
         f"first/last close in each window; stake_usd={wpnl['stake_usd']:.2f} "
-        f"yes_mid={float(args.toy_yes_mid):.3f} fee_roundtrip_bps={float(args.toy_fee_roundtrip_bps):.1f}"
+        f"entry={'gamma_entry_mid_at_fill' if args.wss_pnl_use_gamma_entry else f'yes_mid={float(args.toy_yes_mid):.3f}'} "
+        f"fee_roundtrip_bps={float(args.toy_fee_roundtrip_bps):.1f}"
     )
     if int(wpnl["paper_fills"]) == 0:
         print("_(no paper_fill rows in range)_\n")

@@ -9,8 +9,11 @@ Candidates: ``POLYMARKET_HTF_PYTHON`` (must be a venv), ``.venv313/bin/python``,
 Disable with ``POLYMARKET_HTF_NO_VENV_REEXEC=1``.
 
 Logs JSONL events; tune flags to benchmark vs a simpler baseline (e.g. ``--entry-mode``).
-Optional ``--wss-preset continuation`` bundles fib / entry / pullback / gamma-dev (see ``wss_watch_presets``).
+Optional ``--wss-preset continuation`` bundles entry / pullback / gamma-dev (see ``wss_watch_presets``).
 ``--diag-interval-sec`` emits ``wss_diag`` rows during each live window (why ``timeout`` vs fill).
+After each ``paper_fill``, once ``T_end + buffer`` passes, a ``paper_settlement`` row logs a **Binance 1m**
+open/settle proxy (same spirit as ``month_crt_wss``); optional ``--settlement-stake-usd`` adds suggested PnL
+(not Polymarket oracle cash — use for research / journaling toward live).
 Optional unified eval copy: env ``STRATEGY_EVAL_JOURNAL`` / ``LIVE_EVAL_JOURNAL`` (same as ``dryrun.py``).
 """
 from __future__ import annotations
@@ -59,8 +62,6 @@ def main() -> int:
     p.add_argument("--allow-gamma-inactive", action="store_true")
 
     p.add_argument("--pullback-frac", type=float, default=0.0008)
-    p.add_argument("--fib-lo", type=float, default=0.618)
-    p.add_argument("--fib-hi", type=float, default=0.786)
     p.add_argument("--chainlink-stale-sec", type=float, default=150.0)
 
     p.add_argument("--no-signal-revoke", action="store_true", help="disable S3 (same as full revoke off)")
@@ -109,9 +110,30 @@ def main() -> int:
     )
     p.add_argument(
         "--wss-preset",
-        choices=["default", "continuation"],
+        choices=["default", "continuation", "late_window", "late_window_quality"],
         default="default",
-        help="bundle fib / entry window / pullback / gamma-dev (see polymarket_htf.wss_watch_presets)",
+        help="bundle entry window / pullback / gamma-dev / late-only (see wss_watch_presets)",
+    )
+    p.add_argument(
+        "--late-fill-min-elapsed-sec",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="paper_fill only if now-T >= SEC (overrides preset default when set)",
+    )
+    p.add_argument(
+        "--late-fill-max-remaining-sec",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="paper_fill only if T_end-now <= SEC (must exceed --entry-end-buffer-sec)",
+    )
+    p.add_argument(
+        "--max-retrace-frac",
+        type=float,
+        default=None,
+        metavar="FRAC",
+        help="paper_fill only if retrace_frac <= FRAC (anti-chase filter)",
     )
     p.add_argument(
         "--diag-interval-sec",
@@ -134,6 +156,23 @@ def main() -> int:
         metavar="R",
         help="DOWN arms only if signal bar htf_rp_c1 <= R (e.g. 0.45)",
     )
+    p.add_argument(
+        "--settlement-buffer-sec",
+        type=float,
+        default=45.0,
+        metavar="SEC",
+        help="wait SEC after T_end before Binance proxy fetch for paper_settlement",
+    )
+    p.add_argument(
+        "--settlement-stake-usd",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="if set, paper_settlement includes suggested_pnl_* from share model (research)",
+    )
+    p.add_argument("--settlement-yes-mid", type=float, default=0.5, metavar="P")
+    p.add_argument("--settlement-no-mid", type=float, default=None, metavar="P")
+    p.add_argument("--settlement-fee-roundtrip-bps", type=float, default=0.0, metavar="BPS")
     args = p.parse_args()
 
     from polymarket_htf.config_env import load_dotenv_files
@@ -203,16 +242,26 @@ def main() -> int:
         gamma_min_side_price=args.gamma_min_side_price,
         gamma_max_side_price=args.gamma_max_side_price,
         pullback_frac=args.pullback_frac,
-        fib_lo=args.fib_lo,
-        fib_hi=args.fib_hi,
+        max_retrace_frac=args.max_retrace_frac,
         chainlink_stale_sec=args.chainlink_stale_sec,
         enable_signal_revoke=not args.no_signal_revoke,
         sticky_arm=bool(args.sticky_arm),
         arm_require_htf_rp_ge=args.arm_require_htf_rp_ge,
         arm_require_htf_rp_le=args.arm_require_htf_rp_le,
         diag_interval_sec=args.diag_interval_sec,
+        settlement_buffer_sec=float(args.settlement_buffer_sec),
+        settlement_stake_usd=args.settlement_stake_usd,
+        settlement_yes_mid=float(args.settlement_yes_mid),
+        settlement_no_mid=args.settlement_no_mid,
+        settlement_fee_roundtrip_bps=float(args.settlement_fee_roundtrip_bps),
     )
     prm = apply_sweet_spot_watch_preset(prm, str(args.wss_preset))
+    if args.late_fill_min_elapsed_sec is not None:
+        prm = replace(prm, late_fill_min_elapsed_sec=float(args.late_fill_min_elapsed_sec))
+    if args.late_fill_max_remaining_sec is not None:
+        prm = replace(prm, late_fill_max_remaining_sec=float(args.late_fill_max_remaining_sec))
+    if args.max_retrace_frac is not None:
+        prm = replace(prm, max_retrace_frac=float(args.max_retrace_frac))
     sess = SweetSpotWatchSession(prm)
 
     while True:

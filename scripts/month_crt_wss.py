@@ -15,6 +15,15 @@ Example (all of January 2026 UTC, ~2976 bars ≈ 96/day):
     --wss-spot-source binance_1m --wss-preset continuation \\
     --crt-bars-out var/crt_90d.jsonl --wss-out var/wss_90d.jsonl
 
+**Near-miss path stats** (pullback / retrace vs ``scripts/analyze_wss_nearmiss.py``): add
+``--wss-nearmiss`` (or env ``CRT_MONTH_WSS_NEARMISS=1``), then summarize timeouts:
+
+  ./scripts/analyze_wss_nearmiss.py var/wss_90d.jsonl
+
+**Late-only fills** (Twitter-style: less time left after entry): ``--wss-preset late_window`` (min
+600s after ``T``) or ``--late-fill-min-elapsed-sec 600`` / ``--late-fill-max-remaining-sec 400`` (must
+be **>** ``--entry-end-buffer-sec`` or no fill is possible).
+
 Printed **WSS WR / PnL** uses flat stake + share mids (same knobs as toy CRT). Settlement is a
 **research proxy**: first vs last close in each Polymarket window slice (not on-chain Chainlink).
 Re-summarize: ``./scripts/analyze_crt_exports.py var/crt_90d.jsonl --wss var/wss_90d.jsonl``.
@@ -203,9 +212,15 @@ def main() -> int:
     )
     p.add_argument(
         "--wss-preset",
-        choices=["default", "coarse_spot", "continuation"],
+        choices=["default", "coarse_spot", "continuation", "late_window", "late_window_quality"],
         default=d["wss_preset"],
         help="WSS month preset (env: CRT_MONTH_WSS_PRESET)",
+    )
+    p.add_argument(
+        "--wss-nearmiss",
+        action=argparse.BooleanOptionalAction,
+        default=bool(d["wss_nearmiss"]),
+        help="emit nm_* path stats on each wss_sim row (env: CRT_MONTH_WSS_NEARMISS)",
     )
     p.add_argument(
         "--fetch-gamma",
@@ -213,14 +228,52 @@ def main() -> int:
         default=d["fetch_gamma"],
         help="WSS: live Gamma checks per window (env: CRT_MONTH_FETCH_GAMMA)",
     )
+    p.add_argument(
+        "--wss-post-spot-sec",
+        type=float,
+        default=float(d["wss_post_spot_sec"]),
+        metavar="SEC",
+        help="on paper_fill: attach Binance closes in [T_end, T_end+SEC) (env: CRT_MONTH_WSS_POST_SPOT_SEC)",
+    )
+    p.add_argument(
+        "--wss-gamma-prices-at-fill",
+        action=argparse.BooleanOptionalAction,
+        default=bool(d["wss_gamma_prices_at_fill"]),
+        help="on paper_fill: one Gamma fetch for outcome mids (env: CRT_MONTH_WSS_GAMMA_PRICES_AT_FILL)",
+    )
+    p.add_argument(
+        "--wss-pnl-use-gamma-entry",
+        action=argparse.BooleanOptionalAction,
+        default=bool(d["wss_pnl_use_gamma_entry"]),
+        help="printed WSS PnL: use gamma_entry_mid_at_fill per row when present (env: CRT_MONTH_WSS_PNL_USE_GAMMA_ENTRY)",
+    )
+    p.add_argument(
+        "--late-fill-min-elapsed-sec",
+        type=float,
+        default=d["late_fill_min_elapsed_sec"],
+        metavar="SEC",
+        help="paper_fill only if now-T >= SEC (env: CRT_MONTH_LATE_FILL_MIN_ELAPSED_SEC)",
+    )
+    p.add_argument(
+        "--late-fill-max-remaining-sec",
+        type=float,
+        default=d["late_fill_max_remaining_sec"],
+        metavar="SEC",
+        help="paper_fill only if T_end-now <= SEC; should exceed entry-end-buffer (env: CRT_MONTH_LATE_FILL_MAX_REMAINING_SEC)",
+    )
+    p.add_argument(
+        "--max-retrace-frac",
+        type=float,
+        default=d["max_retrace_frac"],
+        metavar="FRAC",
+        help="paper_fill only if retrace_frac <= FRAC (anti-chase; env: CRT_MONTH_MAX_RETRACE_FRAC)",
+    )
     p.add_argument("--slug-offset-steps", type=int, default=d["slug_offset_steps"])
     p.add_argument("--entry-mode", choices=["until_buffer", "first_minutes"], default=d["entry_mode"])
     p.add_argument("--entry-end-buffer-sec", type=float, default=d["entry_end_buffer_sec"])
     p.add_argument("--entry-first-minutes", type=float, default=d["entry_first_minutes"])
     p.add_argument("--max-gamma-outcome-dev", type=float, default=d["max_gamma_outcome_dev"])
     p.add_argument("--pullback-frac", type=float, default=d["pullback_frac"])
-    p.add_argument("--fib-lo", type=float, default=d["fib_lo"])
-    p.add_argument("--fib-hi", type=float, default=d["fib_hi"])
     p.add_argument(
         "--toy-stake-usd",
         type=float,
@@ -406,13 +459,30 @@ def main() -> int:
         skip_gamma=not bool(args.fetch_gamma),
         require_gamma_active=True,
         pullback_frac=float(args.pullback_frac),
-        fib_lo=float(args.fib_lo),
-        fib_hi=float(args.fib_hi),
     )
     sim_p = apply_wss_month_preset(sim_p, str(args.wss_preset))
+    _lmin = args.late_fill_min_elapsed_sec
+    _lmax = args.late_fill_max_remaining_sec
+    sim_p = replace(
+        sim_p,
+        track_nearmiss=bool(args.wss_nearmiss),
+        post_spot_sec=float(args.wss_post_spot_sec),
+        gamma_prices_at_fill=bool(args.wss_gamma_prices_at_fill),
+        late_fill_min_elapsed_sec=(
+            float(_lmin) if _lmin is not None else sim_p.late_fill_min_elapsed_sec
+        ),
+        late_fill_max_remaining_sec=(
+            float(_lmax) if _lmax is not None else sim_p.late_fill_max_remaining_sec
+        ),
+        max_retrace_frac=(
+            float(args.max_retrace_frac)
+            if args.max_retrace_frac is not None
+            else sim_p.max_retrace_frac
+        ),
+    )
     if str(args.wss_preset) == "coarse_spot":
         print(
-            "wss preset=coarse_spot (relaxed pullback/fib/end-buffer; research — use binance_1m for realistic fills)",
+            "wss preset=coarse_spot (relaxed pullback/end-buffer; research — use binance_1m for realistic fills)",
             flush=True,
         )
     if args.wss_spot_source == "crt_15m" and str(args.wss_preset) == "default":
@@ -428,7 +498,7 @@ def main() -> int:
     else:
         pair = binance_symbol(normalize_asset(args.asset))
         pad_lo = rs - pd.Timedelta(hours=6)
-        pad_hi = re + pd.Timedelta(days=2)
+        pad_hi = re + pd.Timedelta(days=2) + pd.Timedelta(seconds=max(0.0, float(args.wss_post_spot_sec)))
         print(f"wss spot=binance_1m: {pair} {pad_lo} .. {pad_hi} UTC …", flush=True)
         try:
             spot_bars = prefetch_binance_1m_range(pair, pad_lo, pad_hi)
@@ -467,9 +537,11 @@ def main() -> int:
         yes_entry_mid=float(args.toy_yes_mid),
         no_entry_mid=args.toy_no_mid,
         fee_roundtrip_bps=float(args.toy_fee_roundtrip_bps),
+        use_gamma_entry_mid_at_fill=bool(args.wss_pnl_use_gamma_entry),
     )
     print(
-        "wss_pnl_proxy (first/last close in window vs toy stake/mids; see docstring): "
+        "wss_pnl_proxy (first/last close in window vs stake; "
+        f"entry={'gamma_mid_at_fill' if args.wss_pnl_use_gamma_entry else 'toy mids'}; see docstring): "
         f"settled={wss_pnl['settled_trades']} wins={wss_pnl['wins']} "
         f"ties={wss_pnl['settlement_ties']} wr={wss_pnl['win_rate']!s} "
         f"pnl_net_usd={float(wss_pnl['pnl_net_usd']):.2f}",

@@ -1,5 +1,5 @@
 """
-Paper **sweet-spot watcher** for one ``btc-updown-15m-*`` window at a time (C3 + O3 + E3/E5/E6 + optional S3).
+Paper **sweet-spot watcher** for one ``btc-updown-15m-*`` window at a time (C3 + O3 + E3/E5 + optional S3).
 
 S3 (**signal revoke**): when enabled, a new CRT bar that disagrees with the armed side cancels the window.
 **Sticky arm** (``SweetSpotWatchParams.sticky_arm``): skip S3 so the arm survives until ``paper_fill`` or timeout.
@@ -13,10 +13,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from polymarket_htf.assets import normalize_asset
+import pandas as pd
+
+from polymarket_htf.assets import binance_symbol, normalize_asset
+from polymarket_htf.backtest_crt import share_settlement
+from polymarket_htf.crt_wss_monthly import late_fill_timing_ok, wss_proxy_settlement_from_slice
+from polymarket_htf.data import fetch_binance_klines_range
 from polymarket_htf.chainlink_btc import fetch_chainlink_btc_usd
 from polymarket_htf.crt_strategy import CRTParams, last_signal_completed_bar
-from polymarket_htf.fib_entry import fib_pullback_zone, fib_spot_metrics, spot_in_fib_zone
 from polymarket_htf.gamma import (
     build_updown_slug,
     exec_interval_to_polymarket_tf_minutes,
@@ -56,12 +60,14 @@ class SweetSpotWatchParams:
     gamma_min_side_price: float | None = None
     gamma_max_side_price: float | None = None
 
-    # E5 pullback vs session extreme (Chainlink)
+    # E5 pullback vs session extreme (Chainlink); **fill** = pullback + entry window + Gamma (no fib).
     pullback_frac: float = 0.0008
+    # Optional anti-chase gate: require ``retrace_frac <= max_retrace_frac`` at fill.
+    max_retrace_frac: float | None = None
 
-    # E6 Fib band (HTF ctx from CRT bar at arm time)
-    fib_lo: float = 0.618
-    fib_hi: float = 0.786
+    # Optional late-only fills (see :func:`polymarket_htf.crt_wss_monthly.late_fill_timing_ok`).
+    late_fill_min_elapsed_sec: float | None = None
+    late_fill_max_remaining_sec: float | None = None
 
     # O3 Chainlink
     chainlink_stale_sec: float = 150.0
@@ -81,6 +87,14 @@ class SweetSpotWatchParams:
     # Periodic ``wss_diag`` rows during ``[T, T_end)`` (seconds between rows; ``None`` = off).
     diag_interval_sec: float | None = None
 
+    # After ``paper_fill``: when ``now >= T_end + settlement_buffer_sec``, fetch Binance 1m slice
+    # ``[T, T_end)`` and emit ``paper_settlement`` (first/last close proxy — not on-chain oracle).
+    settlement_buffer_sec: float = 45.0
+    settlement_stake_usd: float | None = None  # if set, add suggested PnL on ``paper_settlement``
+    settlement_yes_mid: float = 0.5
+    settlement_no_mid: float | None = None
+    settlement_fee_roundtrip_bps: float = 0.0
+
 
 def _entry_window_ok(*, now: float, T: float, T_end: float, p: SweetSpotWatchParams) -> bool:
     if now < T or now >= T_end - p.entry_end_buffer_sec:
@@ -98,7 +112,6 @@ class _Monitor:
     T: float
     T_end: float
     armed_bar_ts: str
-    fib_zone: tuple[float, float]
     trend_up: bool
     ctx_high: float
     ctx_low: float
@@ -123,6 +136,75 @@ class SweetSpotWatchSession:
         self._session_spot_lo: float | None = None
         self._pullback_ok: bool = False
         self._last_diag_ts: float = 0.0
+        self._pending_settlements: list[dict[str, Any]] = []
+
+    def _flush_pending_settlements(self, now: float, out: list[dict[str, Any]]) -> None:
+        """Emit ``paper_settlement`` rows when window + buffer has passed."""
+        if not self._pending_settlements:
+            return
+        buf = float(self.p.settlement_buffer_sec)
+        kept: list[dict[str, Any]] = []
+        for pen in self._pending_settlements:
+            if now < float(pen["T_end"]) + buf:
+                kept.append(pen)
+                continue
+            out.append(self._paper_settlement_row(pen))
+        self._pending_settlements = kept
+
+    def _paper_settlement_row(self, pen: dict[str, Any]) -> dict[str, Any]:
+        slug = str(pen["slug"])
+        side = str(pen["side"])
+        T = int(pen["T"])
+        T_end = int(pen["T_end"])
+        t0 = pd.Timestamp(float(T), unit="s", tz="UTC")
+        t1 = pd.Timestamp(float(T_end), unit="s", tz="UTC")
+        pair = binance_symbol(self._asset)
+        base: dict[str, Any] = {
+            "kind": "paper_settlement",
+            "slug": slug,
+            "side": side,
+            "T": T,
+            "T_end": T_end,
+            "settlement_proxy": "binance_1m_first_last_close",
+            "fill_spot": pen.get("fill_spot"),
+            "fill_chainlink_updated_at": pen.get("fill_chainlink_updated_at"),
+        }
+        try:
+            win_df = fetch_binance_klines_range(pair, "1m", t0, t1)
+        except Exception as e:  # noqa: BLE001 — Binance geo / network
+            base["result"] = "proxy_error"
+            base["error"] = str(e)
+            base["error_type"] = type(e).__name__
+            return base
+        lab = wss_proxy_settlement_from_slice(win_df, side=side)
+        base.update(lab)
+        if lab.get("settlement_note") == "empty_spot_window":
+            base["result"] = "no_klines"
+            return base
+        base["result"] = "ok"
+        st_usd = self.p.settlement_stake_usd
+        if (
+            st_usd is not None
+            and float(st_usd) > 0
+            and not bool(lab.get("settlement_tie"))
+            and lab.get("side_win") is not None
+        ):
+            fee_rt = float(self.p.settlement_fee_roundtrip_bps) / 10_000.0
+            win = bool(lab["side_win"])
+            st = share_settlement(
+                usdc_spent=float(st_usd),
+                win=win,
+                side=side,
+                yes_mid=float(self.p.settlement_yes_mid),
+                no_mid=self.p.settlement_no_mid,
+            )
+            fee = float(st_usd) * fee_rt
+            base["suggested_stake_usd"] = float(st_usd)
+            base["suggested_entry_price"] = st.entry_price
+            base["suggested_pnl_gross_usd"] = st.pnl_gross
+            base["suggested_fees_usd"] = fee
+            base["suggested_pnl_net_usd"] = st.pnl_gross - fee
+        return base
 
     def _gamma_entry_gate_blocks(self, sig: dict[str, Any], out: list[dict[str, Any]]) -> bool:
         """If side-price gate is configured and fails, append ``skip_arm`` and return True."""
@@ -161,10 +243,9 @@ class SweetSpotWatchSession:
         cl = sig.get("ctx_low")
         close = sig.get("close")
         if ch is None or cl is None or close is None:
-            out.append({"kind": "skip_arm", "reason": "missing_ctx_for_fib", "sig": sig})
+            out.append({"kind": "skip_arm", "reason": "missing_ctx", "sig": sig})
             return False
         trend_up = float(close) >= (float(ch) + float(cl)) / 2.0
-        zone = fib_pullback_zone(float(ch), float(cl), trend_up, fib_lo=p.fib_lo, fib_hi=p.fib_hi)
         next_wo = next_monitor_window_open_epoch(
             bar_open_utc=sig["timestamp"],
             tf_minutes=p.tf_minutes,
@@ -210,7 +291,6 @@ class SweetSpotWatchSession:
             T=T,
             T_end=T_end,
             armed_bar_ts=str(sig["timestamp"]),
-            fib_zone=zone,
             trend_up=trend_up,
             ctx_high=float(ch),
             ctx_low=float(cl),
@@ -227,7 +307,6 @@ class SweetSpotWatchSession:
                 "side": side,
                 "T": int(T),
                 "T_end": int(T_end),
-                "fib_zone": list(zone),
                 "trend_up": trend_up,
                 "ctx_high": float(ch),
                 "ctx_low": float(cl),
@@ -240,6 +319,7 @@ class SweetSpotWatchSession:
     def tick(self, *, now: float | None = None) -> list[dict[str, Any]]:
         now = time.time() if now is None else float(now)
         out: list[dict[str, Any]] = []
+        self._flush_pending_settlements(now, out)
         sig = last_signal_completed_bar(
             self._asset,
             params=self.p.crt,
@@ -276,7 +356,7 @@ class SweetSpotWatchSession:
         if now < m.T:
             return out
 
-        # --- live window: S3 (optional), liquidity, pullback, fib, fill ---
+        # --- live window: S3 (optional), liquidity, pullback, fill ---
         revoke = self.p.enable_signal_revoke and not self.p.sticky_arm
         if revoke and ts_sig is not None and str(ts_sig) != m.armed_bar_ts:
             side2 = str(sig.get("side", "SKIP"))
@@ -319,11 +399,24 @@ class SweetSpotWatchSession:
             if spot >= self._session_spot_lo * (1.0 + self.p.pullback_frac):
                 self._pullback_ok = True
 
+        sh, slo = self._session_spot_hi, self._session_spot_lo
+        retrace_frac = 0.0
+        if m.side == "UP" and sh is not None and float(sh) > 0:
+            retrace_frac = max(0.0, (float(sh) - spot) / float(sh))
+        elif m.side == "DOWN" and slo is not None and float(slo) > 0:
+            retrace_frac = max(0.0, (spot - float(slo)) / float(slo))
+
         win_ok = _entry_window_ok(now=now, T=m.T, T_end=m.T_end, p=self.p)
+        late_ok = late_fill_timing_ok(
+            now=now,
+            T=m.T,
+            T_end=m.T_end,
+            min_elapsed=self.p.late_fill_min_elapsed_sec,
+            max_remaining=self.p.late_fill_max_remaining_sec,
+        )
         iv = self.p.diag_interval_sec
         if iv is not None and float(iv) > 0 and now >= m.T and now < m.T_end:
             if self._last_diag_ts == 0.0 or now - self._last_diag_ts >= float(iv):
-                fib_m = fib_spot_metrics(spot, m.fib_zone)
                 ev_d = fetch_event_by_slug(m.slug)
                 dev_d = gamma_outcome_sum_deviation(ev_d) if ev_d is not None else None
                 gam_ok: bool | None = None
@@ -344,11 +437,17 @@ class SweetSpotWatchSession:
                         "now": now,
                         "secs_to_T_end": float(m.T_end - now),
                         "entry_window_ok": win_ok,
+                        "late_fill_ok": bool(late_ok),
+                        "secs_since_T": float(now - m.T),
                         "pullback_ok": bool(self._pullback_ok),
-                        "fib_zone": list(m.fib_zone),
-                        "in_fib": bool(fib_m["in_fib"]),
-                        "dist_below_fib_lo": float(fib_m["dist_below_fib_lo"]),
-                        "dist_above_fib_hi": float(fib_m["dist_above_fib_hi"]),
+                        "retrace_cap_ok": (
+                            True
+                            if self.p.max_retrace_frac is None
+                            else (float(retrace_frac) <= float(self.p.max_retrace_frac))
+                        ),
+                        "session_spot_hi": float(sh) if sh is not None else None,
+                        "session_spot_lo": float(slo) if slo is not None else None,
+                        "retrace_frac": float(retrace_frac),
                         "spot": spot,
                         "gamma_dev": dev_d,
                         "gamma_dev_ok": dev_ok,
@@ -382,18 +481,32 @@ class SweetSpotWatchSession:
 
         if not self._pullback_ok:
             return out
-
-        if not spot_in_fib_zone(spot, m.side, m.fib_zone):
+        if self.p.max_retrace_frac is not None and float(retrace_frac) > float(self.p.max_retrace_frac):
             return out
 
+        if not late_ok:
+            return out
+
+        self._pending_settlements.append(
+            {
+                "slug": m.slug,
+                "side": m.side,
+                "T": int(m.T),
+                "T_end": int(m.T_end),
+                "fill_spot": spot,
+                "fill_chainlink_updated_at": cl.updated_at,
+            }
+        )
         out.append(
             {
                 "kind": "paper_fill",
                 "slug": m.slug,
                 "side": m.side,
+                "T": int(m.T),
+                "T_end": int(m.T_end),
                 "spot": spot,
                 "chainlink_updated_at": cl.updated_at,
-                "fib_zone": list(m.fib_zone),
+                "retrace_frac": float(retrace_frac),
             }
         )
         self._mon = None

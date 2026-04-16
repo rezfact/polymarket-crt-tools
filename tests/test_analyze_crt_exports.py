@@ -61,7 +61,6 @@ def test_analyze_crt_exports_smoke(tmp_path: Path) -> None:
                         "slug": "x",
                         "T": 1,
                         "T_end": 2,
-                        "fib_zone": [1, 2],
                         "trend_up": True,
                         "result": "timeout",
                     }
@@ -75,7 +74,6 @@ def test_analyze_crt_exports_smoke(tmp_path: Path) -> None:
                         "slug": "y",
                         "T": 1,
                         "T_end": 2,
-                        "fib_zone": [1, 2],
                         "trend_up": False,
                         "result": "paper_fill",
                         "settlement_tie": False,
