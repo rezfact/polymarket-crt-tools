@@ -1,0 +1,19 @@
+[Unit]
+Description=polymarket-crt-tools live follow (one CLOB BUY per paper_fill)
+Documentation=file:/opt/polymarket-crt-tools/deploy/CONFIDENCE_RUNBOOK.md
+After=network-online.target polymarket-crt-sweet-spot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/polymarket-crt-tools
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/polymarket-crt-tools/.env
+ExecStart=/opt/polymarket-crt-tools/.venv/bin/python scripts/live_follow_paper_fill.py --journal var/watch_sweet_spot.jsonl --state-dir var/live_follow_paper --interval-sec 4 --execute
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
