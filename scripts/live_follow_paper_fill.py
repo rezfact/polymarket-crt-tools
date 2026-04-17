@@ -36,6 +36,46 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+def _extract_order_id(resp: object) -> str | None:
+    if not isinstance(resp, dict):
+        return None
+    for k in ("orderID", "orderId", "order_id", "id"):
+        v = resp.get(k)
+        if v:
+            return str(v)
+    return None
+
+
+def _safe_order_snapshot(client, order_id: str) -> tuple[dict | None, str | None]:
+    # py_clob_client versions differ; try multiple lookups and never raise from telemetry paths.
+    for meth_name in ("get_order", "get_order_by_id", "get_order_status"):
+        meth = getattr(client, meth_name, None)
+        if callable(meth):
+            try:
+                snap = meth(order_id)
+                if isinstance(snap, dict):
+                    return snap, None
+                return {"raw": snap}, None
+            except Exception as e:
+                return None, f"{meth_name}: {type(e).__name__}: {e}"[:400]
+    meth = getattr(client, "get_orders", None)
+    if not callable(meth):
+        return None, "no_order_lookup_method"
+    try:
+        rows = meth()
+    except Exception as e:
+        return None, f"get_orders: {type(e).__name__}: {e}"[:400]
+    if not isinstance(rows, list):
+        return None, "get_orders_not_list"
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = row.get("id") or row.get("orderID") or row.get("orderId") or row.get("order_id")
+        if rid and str(rid) == order_id:
+            return row, None
+    return None, "order_not_found_in_open_orders"
+
+
 def fill_key(row: dict) -> str:
     slug = str(row.get("slug", "")).strip()
     side = str(row.get("side", "")).strip().upper()
@@ -175,6 +215,16 @@ def handle_one_fill(
     resp = client.create_and_post_order(order_args, PartialCreateOrderOptions())
     out["result"] = "order_posted"
     out["response"] = resp
+    oid = _extract_order_id(resp)
+    if oid:
+        out["order_id"] = oid
+        snap, snap_err = _safe_order_snapshot(client, oid)
+        if snap is not None:
+            out["order_status_snapshot"] = snap
+        if snap_err:
+            out["order_status_lookup_error"] = snap_err
+    bal_after = clob_collateral_balance_usd(client)
+    out["collateral_balance_post_usd"] = bal_after
     return out
 
 
